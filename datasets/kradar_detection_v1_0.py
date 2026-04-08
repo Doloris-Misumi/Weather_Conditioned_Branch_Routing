@@ -1,9 +1,3 @@
-'''
-* Copyright (c) AVELab, KAIST. All rights reserved.
-* author: Donghee Paek, AVELab, KAIST
-* e-mail: donghee.paek@kaist.ac.kr
-* description: dataset for 3D object detection
-'''
 
 import os
 import os.path as osp

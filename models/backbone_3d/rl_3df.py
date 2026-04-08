@@ -271,20 +271,45 @@ class RL3DFBackbone_Branching(RL3DFBackbone_knngate):
     def __init__(self, cfg):
         super().__init__(cfg)
         self.sensor_token_proj = nn.Linear(cfg.MODEL.BACKBONE.ENCODING.CHANNEL[0], 512)
-        left_transformer_layer = nn.TransformerEncoderLayer(
-            d_model=512,
-            nhead=8,
-            dim_feedforward=1024,
-            dropout=0.1,
-            activation='relu'
+        self.force_branch = str(getattr(cfg.MODEL.BACKBONE, 'FORCE_BRANCH', 'none')).lower()
+        if self.force_branch not in ['none', 'lidar', 'radar', 'fusion']:
+            self.force_branch = 'none'
+        # Replace token Transformer with MLP-based token mixer.
+        # Input tokens: [condition, radar, lidar], each 512-dim.
+        self.condition_mlp = nn.Sequential(
+            nn.Linear(512 * 3, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512)
         )
-        self.left_transformer = nn.TransformerEncoder(left_transformer_layer, num_layers=2)
-        self.left_transformer_norm = nn.LayerNorm(512)
+        self.condition_mlp_norm = nn.LayerNorm(512)
         self.branch_router = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 3)
         )
+        weather_aux_cfg = self.cfg.MODEL.get('WEATHER_AUX', {})
+        self.enable_weather_aux = bool(weather_aux_cfg.get('ENABLED', False))
+        weather_aux_hidden = int(weather_aux_cfg.get('HIDDEN_DIM', 256))
+        weather_num_classes = int(weather_aux_cfg.get('NUM_CLASSES', 7))
+        self.weather_aux_head = nn.Sequential(
+            nn.Linear(512, weather_aux_hidden),
+            nn.ReLU(),
+            nn.Linear(weather_aux_hidden, weather_num_classes)
+        )
+        # Keep a minimum branch weight to prevent hard collapse.
+        self.branch_weight_floor = float(getattr(cfg.MODEL.BACKBONE, 'BRANCH_WEIGHT_FLOOR', 0.1))
+        self.branch_weight_floor = min(max(self.branch_weight_floor, 0.0), (1.0 / 3.0) - 1e-6)
+
+        # Explicitly initialize branch weights to uniform 1/3, 1/3, 1/3 at start.
+        final_router = self.branch_router[-1]
+        nn.init.zeros_(final_router.weight)
+        nn.init.zeros_(final_router.bias)
+
+        # Theoretical initial branch weights after softmax (+ optional floor).
+        init_weights = torch.full((1, 3), 1.0 / 3.0, dtype=torch.float32)
+        if self.branch_weight_floor > 0.0:
+            init_weights = (1.0 - 3.0 * self.branch_weight_floor) * init_weights + self.branch_weight_floor
+        self.initial_branch_weights = init_weights.squeeze(0).tolist()
 
     def _pool_sparse_tokens(self, features, indices, batch_size):
         pooled = []
@@ -329,25 +354,23 @@ class RL3DFBackbone_Branching(RL3DFBackbone_knngate):
         radar_token = self.sensor_token_proj(radar_token)
         lidar_token = self.sensor_token_proj(lidar_token)
 
-        tokens = torch.stack((condition_token, radar_token, lidar_token), dim=0)
-        encoded_tokens = self.left_transformer(tokens)
-        condition_token = self.left_transformer_norm(condition_token + encoded_tokens[0])
+        token_concat = torch.cat((condition_token, radar_token, lidar_token), dim=-1)
+        condition_update = self.condition_mlp(token_concat)
+        condition_token = self.condition_mlp_norm(condition_token + condition_update)
         dict_item['condition_token'] = condition_token
+        if self.enable_weather_aux:
+            dict_item['weather_logits_aux'] = self.weather_aux_head(condition_token)
 
         branch_logits = self.branch_router(condition_token)
         branch_weights = torch.softmax(branch_logits, dim=-1)
+        if self.branch_weight_floor > 0.0:
+            branch_weights = (1.0 - 3.0 * self.branch_weight_floor) * branch_weights + self.branch_weight_floor
+        if self.force_branch != 'none':
+            forced = torch.zeros_like(branch_weights)
+            branch_to_idx = {'lidar': 0, 'radar': 1, 'fusion': 2}
+            forced[:, branch_to_idx[self.force_branch]] = 1.0
+            branch_weights = forced
         dict_item['branch_weights'] = branch_weights
-
-        if dict_item.get('idx_iter', 0) == 0 and dict_item.get('local_rank', 0) == 0:
-            with torch.no_grad():
-                avg_weights = branch_weights.mean(dim=0)
-                w_L, w_R, w_F = avg_weights[0].item(), avg_weights[1].item(), avg_weights[2].item()
-                weather_str = "Unknown"
-                if 'meta' in dict_item and len(dict_item['meta']) > 0:
-                    first_meta = dict_item['meta'][0]
-                    if isinstance(first_meta, dict) and 'desc' in first_meta and 'climate' in first_meta['desc']:
-                        weather_str = first_meta['desc']['climate']
-                print(f"[Weight Monitor] Weather: {weather_str:10s} | Lidar: {w_L:.3f} | Radar: {w_R:.3f} | Fusion: {w_F:.3f}")
 
         xL_pure = xL
         xL_fused = xL 

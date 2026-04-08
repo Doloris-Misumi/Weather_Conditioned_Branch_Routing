@@ -35,6 +35,7 @@ class KRadarDetection_v1_0(Dataset):
         super().__init__()
         self.cfg = cfg
         self.weather_list = ['normal', 'overcast', 'fog', 'rain', 'sleet', 'lightsnow', 'heavysnow']
+        self.condition_level = str(self.cfg.DATASET.get('CONDITION_LEVEL', 'road_weather_time')).lower()
         ### Load label paths wrt split ###
         # load label paths
         self.split = split # in ['train', 'test']
@@ -50,6 +51,7 @@ class KRadarDetection_v1_0(Dataset):
                 seq_label_paths = sorted(glob(osp.join(dir_seq, seq, 'info_label', '*.txt')))
                 seq_label_paths = list(filter(lambda x: (x.split('/')[-1].split('.')[0] in self.dict_split[seq]), seq_label_paths))
                 self.list_path_label.extend(seq_label_paths)
+        self.build_condition_vocab()
         ### Load label paths wrt split ###
 
         ### Type of data for __getitem__ ###
@@ -181,11 +183,11 @@ class KRadarDetection_v1_0(Dataset):
                 dict_item['meta']['path'] = dict_path
                 dict_item['meta']['desc'] = self.get_description(dict_path['path_desc'])
                 # Condition Prompt
-                weather = dict_item['meta']['desc']['climate']
-                time_of_day = dict_item['meta']['desc']['capture_time']
-                dict_item['meta']['condition_prompt'] = f"A {weather} driving scene at {time_of_day} time"
-                
-                dict_item['meta']['image_cls_label'] = self.weather_list.index(dict_item['meta']['desc']['climate'])
+                condition_prompt, condition_id = self.get_condition_prompt_and_id(dict_item['meta']['desc'])
+                dict_item['meta']['condition_prompt'] = condition_prompt
+                dict_item['meta']['condition_id'] = condition_id
+
+                dict_item['meta']['image_cls_label'] = self.get_weather_label(dict_item['meta']['desc']['climate'])
                 calib_info = self.get_calib_info(dict_path['path_calib'])
                 dict_item['calib'] = calib_info
                 dict_item['label'] = self.get_label_bboxes(path_label, calib_info)
@@ -208,6 +210,88 @@ class KRadarDetection_v1_0(Dataset):
                 dict_seq[seq] = []
             dict_seq[seq].append(label)
         return dict_seq
+
+    def normalize_desc_token(self, token):
+        token = str(token).strip().lower()
+        if len(token) == 0:
+            return 'unknown'
+        return token
+
+    def get_weather_label(self, climate):
+        climate = self.normalize_desc_token(climate)
+        if climate in self.weather_list:
+            return self.weather_list.index(climate)
+        return 0
+
+    def get_condition_tuple(self, dict_desc):
+        road_type = self.normalize_desc_token(dict_desc.get('road_type', 'unknown'))
+        capture_time = self.normalize_desc_token(dict_desc.get('capture_time', 'unknown'))
+        climate = self.normalize_desc_token(dict_desc.get('climate', 'unknown'))
+        if self.condition_level == 'weather_time':
+            return (climate, capture_time)
+        return (road_type, climate, capture_time)
+
+    def condition_tuple_to_prompt(self, condition_tuple):
+        if self.condition_level == 'weather_time':
+            climate, capture_time = condition_tuple
+            return f"A {climate} driving scene at {capture_time} time"
+        road_type, climate, capture_time = condition_tuple
+        return f"A {climate} driving scene on {road_type} roads at {capture_time} time"
+
+    def build_condition_vocab(self):
+        set_condition_tuple = set()
+        self.dict_seq_condition_id = dict()
+
+        for seq in sorted(self.dict_split.keys()):
+            path_desc = None
+            for dir_seq in self.cfg.DATASET.DIR.LIST_DIR:
+                path_desc_cand = osp.join(dir_seq, seq, 'description.txt')
+                if osp.isfile(path_desc_cand):
+                    path_desc = path_desc_cand
+                    break
+
+            if path_desc is None:
+                continue
+
+            dict_desc = self.get_description(path_desc)
+            condition_tuple = self.get_condition_tuple(dict_desc)
+            set_condition_tuple.add(condition_tuple)
+
+        if len(set_condition_tuple) == 0:
+            if self.condition_level == 'weather_time':
+                set_condition_tuple.add(('unknown', 'unknown'))
+            else:
+                set_condition_tuple.add(('unknown', 'unknown', 'unknown'))
+
+        self.list_condition_tuple = sorted(list(set_condition_tuple))
+        self.dict_condition_to_id = {
+            condition_tuple: idx_condition for idx_condition, condition_tuple in enumerate(self.list_condition_tuple)
+        }
+        self.condition_prompt_vocab = [
+            self.condition_tuple_to_prompt(condition_tuple) for condition_tuple in self.list_condition_tuple
+        ]
+        self.num_condition_classes = len(self.condition_prompt_vocab)
+
+        for seq in sorted(self.dict_split.keys()):
+            path_desc = None
+            for dir_seq in self.cfg.DATASET.DIR.LIST_DIR:
+                path_desc_cand = osp.join(dir_seq, seq, 'description.txt')
+                if osp.isfile(path_desc_cand):
+                    path_desc = path_desc_cand
+                    break
+            if path_desc is None:
+                self.dict_seq_condition_id[seq] = -1
+                continue
+
+            dict_desc = self.get_description(path_desc)
+            condition_tuple = self.get_condition_tuple(dict_desc)
+            self.dict_seq_condition_id[seq] = self.dict_condition_to_id.get(condition_tuple, -1)
+
+    def get_condition_prompt_and_id(self, dict_desc):
+        condition_tuple = self.get_condition_tuple(dict_desc)
+        condition_prompt = self.condition_tuple_to_prompt(condition_tuple)
+        condition_id = self.dict_condition_to_id.get(condition_tuple, -1)
+        return condition_prompt, condition_id
 
     def load_physical_values(self, is_in_rad=True, is_with_doppler=False):
         temp_values = loadmat('./resources/info_arr.mat')
@@ -563,12 +647,12 @@ class KRadarDetection_v1_0(Dataset):
         # ./tools/tag_generator
         try:
             f = open(path_desc)
-            line = f.readline()
-            road_type, capture_time, climate = line.split(',')
+            line = f.readline().strip()
+            road_type, capture_time, climate = line.split(',', 2)
             dict_desc = {
-                'capture_time': capture_time,
-                'road_type': road_type,
-                'climate': climate,
+                'capture_time': self.normalize_desc_token(capture_time),
+                'road_type': self.normalize_desc_token(road_type),
+                'climate': self.normalize_desc_token(climate),
             }
             f.close()
         except:
@@ -901,11 +985,11 @@ class KRadarDetection_v1_0(Dataset):
             dict_item['meta']['desc'] = self.get_description(dict_path['path_desc'])
             
             # Condition Prompt
-            weather = dict_item['meta']['desc']['climate']
-            time_of_day = dict_item['meta']['desc']['capture_time']
-            dict_item['meta']['condition_prompt'] = f"A {weather} driving scene at {time_of_day} time"
+            condition_prompt, condition_id = self.get_condition_prompt_and_id(dict_item['meta']['desc'])
+            dict_item['meta']['condition_prompt'] = condition_prompt
+            dict_item['meta']['condition_id'] = condition_id
 
-            dict_item['meta']['image_cls_label'] = self.weather_list.index(dict_item['meta']['desc']['climate'])
+            dict_item['meta']['image_cls_label'] = self.get_weather_label(dict_item['meta']['desc']['climate'])
             calib_info = self.get_calib_info(dict_path['path_calib'])
             dict_item['calib'] = calib_info
             dict_item['label'] = self.get_label_bboxes(path_label, calib_info)
@@ -959,6 +1043,7 @@ class KRadarDetection_v1_0(Dataset):
         dict_batch['label'] = []
         dict_batch['num_objs'] = []
         dict_batch['condition_prompts'] = [] # Add prompt list
+        dict_batch['condition_ids'] = []
         
         ### Stack to list ###
         for batch_id, dict_temp in enumerate(list_dict_item):
@@ -984,6 +1069,7 @@ class KRadarDetection_v1_0(Dataset):
                 dict_batch['condition_prompts'].append(dict_temp['meta']['condition_prompt'])
             else:
                 dict_batch['condition_prompts'].append("") # Empty fallback
+            dict_batch['condition_ids'].append(int(dict_temp['meta'].get('condition_id', -1)))
         ### Stack to list ###
 
         ### Processing with keys ###
@@ -1007,6 +1093,8 @@ class KRadarDetection_v1_0(Dataset):
                         pass
         ### Processing with keys ###
 
+        dict_batch['condition_ids'] = torch.tensor(dict_batch['condition_ids'], dtype=torch.long)
+        dict_batch['condition_prompt_vocab'] = self.condition_prompt_vocab
         dict_batch['batch_size'] = batch_id+1
 
         return dict_batch
@@ -1045,27 +1133,3 @@ if __name__ == '__main__':
     # dataset.show_rdr_sparse_cube_from_dict_item(dict_item)
     dataset.show_rpc_cfar_with_lpc(dict_item, type_filter='ror')
     ### Rdr spcube (GET_ITEM['rdr_sp_cube']: True)
-
-    ### Camera image
-    # cv2.imshow('front image', cv2.imread(dict_item['meta']['path']['cam_front_img']))
-    # cv2.waitKey(0)
-    ### Camera image
-
-    ### Rdr cube (GET_ITEM['rdr_cube']: True, GET_ITEM['rdr_cube_doppler']: True)
-    # dataset.show_radar_cube_bev(dict_item, label)
-    # dataset.show_rdr_sparse_cube_with_lpc(dict_item)
-    ### Rdr cube (GET_ITEM['rdr_cube']: True, GET_ITEM['rdr_cube_doppler']: True)
-    
-    ### CFAR & Filtering radar point cloud ###
-    
-    ### CFAR & Filtering radar point cloud ###
-
-    ### Rdr Cube (V1),  ###
-    # dataset.show_radar_cube_bev(dataset[idx_datum], bboxes=label, is_with_doppler=False, is_with_log=True)
-    # dataset.show_sliced_radar_cube(dataset[idx_datum], bboxes=label) # idx_datum = 50: Car shape visualization
-    # dataset.show_sliced_radar_cube(dataset[idx_datum], idx_custom_slice=[50, 70, 50, 100]) # idx_datum = 50
-    # dataset.show_sliced_radar_cube(dataset[idx_datum], idx_custom_slice=[110, 130, 50, 100]) # idx_datum = 100 (seq 9)
-    # dataset.show_sliced_radar_cube(dataset[idx_datum], idx_custom_slice=[30, 50, 50, 100]) # idx_datum = 100 (seq 9)
-    # dataset.show_rdr_pc_cube(dataset[idx_datum], bboxes=label, cfar_params=[25,8,0.1], axis='x')
-    ### Rdr Cube (V1) ###
-    

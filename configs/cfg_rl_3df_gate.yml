@@ -4,10 +4,11 @@ GENERAL:
   COMMENT1: 'Driving corridor, LR 0.001~0.0001'
   COMMENT2: 'Adam'
   VERSION: '1.1'
-  SEED: 150228
+  SEED: 202206
   IS_CUDA_SEED: False
   IS_DETERMINISTIC: True
   DEVICE: 'gpu'
+  DDP_TIMEOUT_MINUTES: 240
   RESUME:
     IS_RESUME: False
     PATH_EXP: # None
@@ -33,7 +34,7 @@ DATASET:
   DIR:
     ### Server room 1 ###
     # The directory order may affect the performance due to sampling order
-    LIST_DIR: ['/home/hongsheng/k_radar_dataset']
+    LIST_DIR: ['path_to/k_radar_dataset']
     DIR_DOPPLER_CB: 
     DIR_SPARSE_CB: 
     ### Server room 1 ###
@@ -179,6 +180,24 @@ DATASET:
 MODEL:
   NAME: 'rl_3dfgate'
   SKELETON: 'RL3DF_gate'
+  ENABLE_CONTRASTIVE: False
+  LAMBDA_CONTRASTIVE: 0.1
+  WEATHER_AUX:
+    ENABLED: True
+    LAMBDA: 0.1
+    HIDDEN_DIM: 256
+    NUM_CLASSES: 7
+    CLASS_WEIGHTS: [1.0, 1.0, 1.5, 1.0, 2.0, 1.0, 1.8] # normal, overcast, fog, rain, sleet, lightsnow, heavysnow
+  WEATHER_DIVERSITY:
+    ENABLED: True
+    LAMBDA: 0.02
+    INTER_WEIGHT: 1.0
+    INTER_MARGIN: 0.12
+    MIN_SAMPLES_PER_CLASS: 2
+  BRANCH_ENTROPY:
+    ENABLED: True
+    LAMBDA: 0.01
+    TARGET_RATIO: 0.78
 
   PRE_PROCESSOR:
     NAME: 'RadarSparseProcessor'
@@ -190,11 +209,13 @@ MODEL:
 
   IMG_CLS:
     NAME: 'ImageClsBackbone'
-    MODEL_PATH: '' # Set this to your trained stage-1 weather classifier checkpoint.
+    MODEL_PATH: './models/img_cls/best007_98.pth' # './models/img_cls/best015_100.pth'
 
   BACKBONE:
     TYPE: '3D'
     NAME: 'RL3DFBackbone_Branching'
+    FORCE_BRANCH: 'none' # in ['none', 'lidar', 'radar', 'fusion']
+    BRANCH_WEIGHT_FLOOR: 0.1
     ENCODING:
       CHANNEL: [64, 128, 256]
       PADDING: [1, 1, 1]
@@ -208,26 +229,8 @@ MODEL:
       PADDING: [[0,0], [0,0], [0,0]]
 
   HEAD:
-    NAME: 'TransformerDecoderHead'
-    DIM: 1536 # 256 * 6 (L+R+F) * (1+1+1) ? Wait, let's check backbone output
-    # Backbone outputs concatenation of [bev_feat_R, bev_feat_L] or [bev_feat_R, bev_feat_F] or [zeros, bev_feat_L]
-    # Each bev_feat is 256 channels.
-    # final_bev is cat(R, L) dim. 
-    # R is cat(list_bev_R). list_bev_R has 3 levels? No, just one final output?
-    # Actually RL3DFBackbone_Branching returns dict_item['bev_feat']
-    # Let's re-check the backbone code.
-    # It concatenates 3 levels of features?
-    # No, it seems to be just accumulating list_bev and then cat.
-    # If list_bev has 3 elements (from 3 encoder layers), and each is 256 channels.
-    # Then bev_feat_R is 256*3 = 768.
-    # final_bev is cat(R, L) -> 768 * 2 = 1536.
-    
-    HIDDEN_DIM: 256
-    NUM_QUERIES: 100
-    NHEAD: 8
-    NUM_LAYERS: 3
-    
-    # Original anchors config (kept for reference or if we switch back)
+    NAME: 'RdrSpcubeHead'
+    DIM: 1536  # backbone bev_feat channel
     NMS_OVERLAP_THRESHOLD: 0.3
     BG_WEIGHT: 2
     BOX_CODE: ['x', 'y', 'z', 'w', 'l', 'h', 'sin', 'cos'] # 8
@@ -251,16 +254,20 @@ MODEL:
 OPTIMIZER: # Training
   NAME: 'Adam'
 
-  LR: 0.00005
-  MIN_LR: 0.000001 # for scheduler
+  LR: 0.0005
+  MIN_LR: 0.0001 # for scheduler
   BETAS: [0.9, 0.999]
   WEIGHT_DECAY: 0.01
   MOMENTUM: 0.9
 
-  BATCH_SIZE: 8
-  NUM_WORKERS: 8 # 0 for dataloader_error / 4 for batch 16
+  BATCH_SIZE: 4
+  NUM_WORKERS: 4 # 0 for dataloader_error / 4 for batch 16
+  USE_WEATHER_BALANCED_SAMPLER: False
+  WEATHER_BALANCE_POW: 0.5
+  WEATHER_BALANCE_MAX_RATIO: 3.0
+  WEATHER_BALANCE_MIN_RATIO: 1.0
 
-  MAX_EPOCH: 40
+  MAX_EPOCH: 20
   
   SCHEDULER: 'CosineAnnealingLR' # in [None (empty), 'LambdaLR', 'CosineAnnealingLR']
   TYPE_TOTAL_ITER: 'all' # in ['every', 'all'] / every epoch
@@ -270,9 +277,12 @@ OPTIMIZER: # Training
 VAL:
   IS_VALIDATE: True
   IS_CONSIDER_VAL_SUBSET: True
-  VAL_PER_EPOCH_SUBSET: 2
-  NUM_SUBSET: 500 # 5834
-  VAL_PER_EPOCH_FULL: 10 # epoch for validate full dataset
+  VAL_PER_EPOCH_SUBSET: 1
+  NUM_SUBSET: 5830
+  FULL_ONLY_AT_END: True
+  VAL_PER_EPOCH_FULL: 40 # used only when FULL_ONLY_AT_END=False
+  RUN_CONDITIONAL_AT_END: True
+  SKIP_STANDARD_FULL_WHEN_CONDITIONAL: True # avoid duplicated full validation at train end
 
   TRAIN_AUG: True
   TEST_AUG: False

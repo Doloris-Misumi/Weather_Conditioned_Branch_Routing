@@ -1,11 +1,3 @@
-'''
-* Copyright (c) AVELab, KAIST. All rights reserved.
-* author: Donghee Paek & Kevin Tirta Wijaya, AVELab, KAIST
-* e-mail: donghee.paek@kaist.ac.kr, kevin.tirta@kaist.ac.kr
-* description: pipeline for 3D object detection
-* changed: 2023-01-02
-'''
-
 import torch
 import numpy as np
 import open3d as o3d

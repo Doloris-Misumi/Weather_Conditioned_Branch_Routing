@@ -84,7 +84,28 @@ python models/img_cls/cls_train.py
 ### Stage 2: Train the Detector
 
 ```bash
-python main_train_0.py
+export HF_ENDPOINT=https://hf-mirror.com
+
+# Set GPUs (modify according to your machine)
+export CUDA_VISIBLE_DEVICES=<GPU_IDS>
+
+# Number of processes = number of GPUs
+NUM_GPUS=<NUM_GPUS>
+
+# Launch distributed training
+torchrun \
+  --nproc_per_node=$NUM_GPUS \
+  --master_port=<PORT> \
+  main_train_0.py
+
+# Example
+export CUDA_VISIBLE_DEVICES=0,1
+NUM_GPUS=2
+
+torchrun \
+  --nproc_per_node=$NUM_GPUS \
+  --master_port=29500 \
+  main_train_0.py
 ```
 
 ### Evaluate a Trained Detector

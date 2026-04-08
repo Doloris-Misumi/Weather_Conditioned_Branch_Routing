@@ -1,6 +1,5 @@
 # Weather_Conditioned_Branch_Routing
 
-Official repository for weather-conditioned branch routing built on top of the RL_3DOD / K-Radar codebase. The original RL_3DOD project is associated with "Towards Robust 3D Object Detection with LiDAR and 4D Radar Fusion in Various Weather Conditions", CVPR 2024. [[Paper]](https://openaccess.thecvf.com/content/CVPR2024/papers/Chae_Towards_Robust_3D_Object_Detection_with_LiDAR_and_4D_Radar_CVPR_2024_paper.pdf)
 
 ## Overview
 
@@ -145,13 +144,14 @@ Weather_Conditioned_Branch_Routing/
 If this repository is helpful for your work, please cite the corresponding paper:
 
 ```bibtex
-@InProceedings{Chae_2024_CVPR,
-    author    = {Chae, Yujeong and Kim, Hyeonseong and Yoon, Kuk-Jin},
-    title     = {Towards Robust 3D Object Detection with LiDAR and 4D Radar Fusion in Various Weather Conditions},
-    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-    month     = {June},
-    year      = {2024},
-    pages     = {15162-15172}
+@misc{li2026weatherconditionedbranchroutingrobust,
+      title={Weather-Conditioned Branch Routing for Robust LiDAR-Radar 3D Object Detection}, 
+      author={Hongsheng Li and Lingfeng Zhang and Zexian Yang and Liang Li and Rong Yin and Xiaoshuai Hao and Wenbo Ding},
+      year={2026},
+      eprint={2604.05405},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2604.05405}, 
 }
 ```
 

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import argparse
 from cls_model import ImageClsBackbone
 from torch.utils.data import Dataset
 import torch.nn.functional as F
@@ -11,8 +12,6 @@ import torchvision.transforms as transforms
 import torch.optim as optim
 import os.path as osp
 import tqdm
-
-os.environ['CUDA_VISIBLE_DEVICES']= '0'
 
 """
 # source: https://github.com/open-mmlab/OpenPCDet/blob/1f5b7872b03e9e3d42801872bc59681ef36357b5/pcdet/config.py
@@ -126,40 +125,55 @@ class ImgDataset(Dataset):
         return len(self.cls_label_list)  
     
     
-network = ImageClsBackbone()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-network.to(device)
-
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-path_cfg = './configs/cfg_rl_3df_gate.yml'
-testset = ImgDataset(path_cfg=path_cfg, split='test', transform=transform)
-print(testset.__len__())
-
-batch_size=1
-testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
-                                         shuffle=False, num_workers=2)
-weather_list = ['normal', 'overcast', 'fog', 'rain', 'sleet', 'light snow', 'heavy snow']
-
-best_pth = './models/img_cls/best043_91.pth'
-network.load_state_dict(torch.load(best_pth))
-network.eval()
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default='./configs/cfg_rl_3df_gate.yml')
+    parser.add_argument('--checkpoint', required=True)
+    parser.add_argument('--batch-size', type=int, default=1)
+    parser.add_argument('--num-workers', type=int, default=2)
+    parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
+    return parser.parse_args()
 
 
-corr_total = np.zeros((8, 2)) # correct, total
-network.eval()
-with torch.no_grad():
-    for data in tqdm.tqdm(testloader):
-        image, label, path_cam_front = data
-        image, label = data[0].to(device), data[1].to(device)
-        dict_item = dict()
-        dict_item['cam_front_img'] = image
-        
-        outputs = network(dict_item)
-        _, predicted = torch.max(outputs['img_cls_output'].data, 0)
-        corr_total[0, 1] += label.size(0)
-        corr_total[label.item()+1, 1] += label.size()
-        corr_total[0, 0] += (predicted == label).sum().item()
-        corr_total[label.item()+1, 0] += (predicted == label).sum().item()
-print(corr_total)
+def main():
+    args = parse_args()
+
+    network = ImageClsBackbone()
+    device = torch.device(args.device)
+    network.to(device)
+
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    testset = ImgDataset(path_cfg=args.config, split='test', transform=transform)
+    print(testset.__len__())
+
+    testloader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
+    network.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    network.eval()
+
+    corr_total = np.zeros((8, 2)) # correct, total
+    network.eval()
+    with torch.no_grad():
+        for data in tqdm.tqdm(testloader):
+            image, label, path_cam_front = data
+            image, label = data[0].to(device), data[1].to(device)
+            dict_item = dict()
+            dict_item['cam_front_img'] = image
+            
+            outputs = network(dict_item)
+            _, predicted = torch.max(outputs['img_cls_output'].data, 0)
+            corr_total[0, 1] += label.size(0)
+            corr_total[label.item()+1, 1] += label.size()
+            corr_total[0, 0] += (predicted == label).sum().item()
+            corr_total[label.item()+1, 0] += (predicted == label).sum().item()
+    print(corr_total)
+
+
+if __name__ == '__main__':
+    main()

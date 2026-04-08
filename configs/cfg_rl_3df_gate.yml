@@ -190,7 +190,7 @@ MODEL:
 
   IMG_CLS:
     NAME: 'ImageClsBackbone'
-    MODEL_PATH: './models/img_cls/best007_98.pth' # './models/img_cls/best015_100.pth'
+    MODEL_PATH: '' # Set this to your trained stage-1 weather classifier checkpoint.
 
   BACKBONE:
     TYPE: '3D'

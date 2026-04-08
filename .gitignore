@@ -142,3 +142,23 @@ cython_debug/
 # Logs
 *.log
 nohup.out
+logs/
+vis_outputs/
+vis_samples/
+utils/Rotated_IoU/cuda_op/build/
+
+# Local data and experiment artifacts
+data/
+outputs/
+checkpoints/
+artifacts/
+wandb/
+
+# Editors / OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -47,7 +47,19 @@ def build_optimizer(p_pline, model):
     momentum = p_pline.cfg.OPTIMIZER.MOMENTUM
     
     ###########################################################################
-    state_dict = torch.load(p_pline.cfg.MODEL.IMG_CLS.MODEL_PATH)
+    img_cls_model_path = p_pline.cfg.MODEL.IMG_CLS.MODEL_PATH
+    if (img_cls_model_path is None) or (not str(img_cls_model_path).strip()):
+        raise FileNotFoundError(
+            'MODEL.IMG_CLS.MODEL_PATH is empty. '
+            'Please train or provide the stage-1 weather classifier checkpoint before stage-2 training.'
+        )
+    if not os.path.exists(img_cls_model_path):
+        raise FileNotFoundError(
+            f'Weather classifier checkpoint not found: {img_cls_model_path}. '
+            'Update MODEL.IMG_CLS.MODEL_PATH in the config to a valid .pth file.'
+        )
+
+    state_dict = torch.load(img_cls_model_path, map_location='cpu')
     with torch.no_grad():
         model.img_cls.conv1.weight.copy_(state_dict['conv1.weight'])
         model.img_cls.conv1.bias.copy_(state_dict['conv1.bias'])

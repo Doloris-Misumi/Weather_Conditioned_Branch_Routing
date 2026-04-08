@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import sys
 import os
+import argparse
 import os.path as osp
 
 # Add current directory to sys.path to allow importing cls_model
@@ -18,8 +19,6 @@ import torchvision.transforms as transforms
 import torch.optim as optim
 import os.path as osp
 import tqdm
-
-os.environ['CUDA_VISIBLE_DEVICES']= '0'
 
 """
 # source: https://github.com/open-mmlab/OpenPCDet/blob/1f5b7872b03e9e3d42801872bc59681ef36357b5/pcdet/config.py
@@ -161,68 +160,93 @@ class ImgDataset(Dataset):
     def __len__(self):
         return len(self.cls_label_list)
 
-network = ImageClsBackbone()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-network.to(device)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default='./configs/cfg_rl_3df_gate.yml')
+    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--num-workers', type=int, default=2)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--momentum', type=float, default=0.9)
+    parser.add_argument('--output-dir', default='./models/img_cls')
+    parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
+    return parser.parse_args()
 
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-path_cfg = './configs/cfg_rl_3df_gate.yml'
-trainset = ImgDataset(path_cfg=path_cfg, split='train', transform=transform)
-testset = ImgDataset(path_cfg=path_cfg, split='test', transform=transform)
-print(trainset.__len__(), testset.__len__())
 
-batch_size = 16
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
-                                          shuffle=True, num_workers=2)
-testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
-                                         shuffle=False, num_workers=2)
+def main():
+    args = parse_args()
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(network.parameters(), lr=0.001, momentum=0.9)
-weather_list = ['normal', 'overcast', 'fog', 'rain', 'sleet', 'light snow', 'heavy snow']
+    network = ImageClsBackbone()
+    device = torch.device(args.device)
+    network.to(device)
 
-best_acc = 0
-for epoch in range(20):
-    running_loss = 0.0
-    network.train()
-    for i, data in tqdm.tqdm(enumerate(trainloader, 0)):
-        image, label = data[0].to(device), data[1].to(device)
-        dict_item = dict()
-        dict_item['cam_front_img'] = image
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    trainset = ImgDataset(path_cfg=args.config, split='train', transform=transform)
+    testset = ImgDataset(path_cfg=args.config, split='test', transform=transform)
+    print(trainset.__len__(), testset.__len__())
 
-        optimizer.zero_grad()
-        outputs = network(dict_item)
-        loss = criterion(outputs['img_cls_output'], label)
-        loss.backward()
-        optimizer.step()
+    trainloader = torch.utils.data.DataLoader(
+        trainset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+    )
+    testloader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
 
-        running_loss += loss.item()
-        if i % 100 == 99:
-            print(f'[{epoch}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-            running_loss = 0.0
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(network.parameters(), lr=args.lr, momentum=args.momentum)
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    correct = 0
-    total = 0
-    network.eval()
-    with torch.no_grad():
-        for data in tqdm.tqdm(testloader):
-            image, label, path_cam_front = data
+    best_acc = 0
+    for epoch in range(args.epochs):
+        running_loss = 0.0
+        network.train()
+        for i, data in tqdm.tqdm(enumerate(trainloader, 0)):
             image, label = data[0].to(device), data[1].to(device)
             dict_item = dict()
             dict_item['cam_front_img'] = image
+
+            optimizer.zero_grad()
             outputs = network(dict_item)
-            _, predicted = torch.max(outputs['img_cls_output'].data, 1)
-            total += label.size(0)
-            correct += (predicted == label).sum().item()
-    acc = correct / total
+            loss = criterion(outputs['img_cls_output'], label)
+            loss.backward()
+            optimizer.step()
 
-    if acc > best_acc:
-        torch.save(network.state_dict(), 
-                   './models/img_cls/best' + str(epoch).zfill(3) + '_' + str(acc*100).split('.')[0] + '.pth')
-        print('epoch, best acc: ' + str(epoch).zfill(3) + '_' + str(acc))
-        best_acc = acc
-    else:
-        print('epoch, acc: ' + str(epoch).zfill(3) + '_' + str(acc))
+            running_loss += loss.item()
+            if i % 100 == 99:
+                print(f'[{epoch}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
+                running_loss = 0.0
 
+        correct = 0
+        total = 0
+        network.eval()
+        with torch.no_grad():
+            for data in tqdm.tqdm(testloader):
+                image, label, path_cam_front = data
+                image, label = data[0].to(device), data[1].to(device)
+                dict_item = dict()
+                dict_item['cam_front_img'] = image
+                outputs = network(dict_item)
+                _, predicted = torch.max(outputs['img_cls_output'].data, 1)
+                total += label.size(0)
+                correct += (predicted == label).sum().item()
+        acc = correct / total
+
+        if acc > best_acc:
+            ckpt_name = 'best' + str(epoch).zfill(3) + '_' + str(acc * 100).split('.')[0] + '.pth'
+            torch.save(network.state_dict(), osp.join(args.output_dir, ckpt_name))
+            print('epoch, best acc: ' + str(epoch).zfill(3) + '_' + str(acc))
+            best_acc = acc
+        else:
+            print('epoch, acc: ' + str(epoch).zfill(3) + '_' + str(acc))
+
+
+if __name__ == '__main__':
+    main()

@@ -1,9 +1,3 @@
-'''
-* Copyright (c) AVELab, KAIST. All rights reserved.
-* author: Donghee Paek & Kevin Tirta Wijaya, AVELab, KAIST
-* e-mail: donghee.paek@kaist.ac.kr, kevin.tirta@kaist.ac.kr
-'''
-
 import os
 import argparse
 
@@ -32,8 +26,14 @@ if __name__ == '__main__':
 
     pline.train_network()
 
-    if (not pline.is_distributed) or (pline.local_rank == 0):
-        pline.validate_kitti_conditional(list_conf_thr=[0.3], is_subset=False, is_print_memory=False)
+    run_conditional_at_end = bool(pline.cfg.VAL.get('RUN_CONDITIONAL_AT_END', True))
+    if run_conditional_at_end and ((not pline.is_distributed) or (pline.local_rank == 0)):
+        list_conf_thr = pline.cfg.VAL.get('LIST_VAL_CONF_THR', [0.3])
+        pline.validate_kitti_conditional(
+            list_conf_thr=list_conf_thr,
+            is_subset=False,
+            is_print_memory=False
+        )
     
     if pline.is_distributed:
         import torch.distributed as dist
